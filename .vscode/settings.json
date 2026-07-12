@@ -1,0 +1,8 @@
+{
+    // 按下 Tab 键时插入空格而不是制表符
+    "editor.insertSpaces": true,
+    // 设置 Tab 键对应的空格数量
+    "editor.tabSize": 4,
+    // 根据文件内容自动检测缩进风格
+    "editor.detectIndentation": false
+}
