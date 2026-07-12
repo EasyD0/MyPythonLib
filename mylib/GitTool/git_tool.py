@@ -3,29 +3,29 @@ import subprocess
 import re
 
 def run_git_cmd(params:list[str], cwd:Path|str, )->str|None:
-	"""
-	运行 git 命令
-	:param params: 命令参数列表
-	:param cwd: 工作目录
-	:return: 命令执行结果；发生错误时返回 None
-	"""
-	cmd = ["git"] + params
-	process = subprocess.run(
+    """
+    运行 git 命令
+    :param params: 命令参数列表
+    :param cwd: 工作目录
+    :return: 命令执行结果；发生错误时返回 None
+    """
+    cmd = ["git"] + params
+    process = subprocess.run(
         cmd,  # 要执行的命令列表
         text=True,  # 以文本模式返回输出
         encoding="utf-8",  # 指定编码为 UTF-8
         check=False,  # 不抛出异常，由下方手动判断返回码
         cwd=cwd,  # 指定工作目录
-		capture_output=True
-	)
+        capture_output=True
+    )
 
-	# 非零返回码且存在 stderr 输出时视为真正的错误
-	# 注意: git diff 等命令在存在差异时也会返回非零，但不会写 stderr
-	if process.returncode != 0 and process.stderr.strip():
-		print(f"git 命令 {' '.join(cmd)} 执行失败: {process.stderr.strip()}")
-		return None
+    # 非零返回码且存在 stderr 输出时视为真正的错误
+    # 注意: git diff 等命令在存在差异时也会返回非零，但不会写 stderr
+    if process.returncode != 0 and process.stderr.strip():
+        print(f"git 命令 {' '.join(cmd)} 执行失败: {process.stderr.strip()}")
+        return None
 
-	return process.stdout.strip()
+    return process.stdout.strip()
 
 def compare_folders(dir_old: str | Path, dir_new: str | Path) -> dict:
     """
