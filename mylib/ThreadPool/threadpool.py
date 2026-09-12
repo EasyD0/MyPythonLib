@@ -1,4 +1,3 @@
-from queue import Queue
 import queue
 from concurrent.futures import Future
 from threading import Thread, Lock, Event, Condition
@@ -26,63 +25,55 @@ class task_wrapper:
         return self.future
 
     def execute(self) -> None:
-        self.future.set_result(self.func(*self.args, **self.kwargs))
+        try:
+            self.future.set_result(self.func(*self.args, **self.kwargs))
+        except Exception as e:
+            self.future.set_exception(e)
 
 
-class Worker:
+class Worker(Thread):
     """
     消费者
     """
 
     id: int = 0
 
-    def __init__(self, task_queue: Queue[task_wrapper], condition: Condition):
+    def __init__(self, task_queue: queue.Queue):
+        super().__init__(daemon=True)
         self._id = Worker.id
         Worker.id += 1
         self.task_queue = task_queue
         self._stop_event = Event()
-        self.condition = condition
 
-    def _job(self):
+    def run(self):
         """实际的任务函数"""
         while not self._stop_event.is_set():
-            with self.condition:
-                # 获取一个任务封装（Future, 函数, 参数）
-                task = self.task_queue.get()
-                if task is None:  # 收到停止信号
-                    continue
+            task = self.task_queue.get()
+            if task is None:
+                break
 
-                future = task.get_future()
+            future = task.get_future()
 
-                # 检查 Future 是否已被取消
-                if not future.set_running_or_notify_cancel():
-                    self.task_queue.task_done()
-                    continue
+            if not future.set_running_or_notify_cancel():
+                self.task_queue.task_done()
+                continue
 
-                try:
-                    # 执行任务并设置结果
-                    task.execute()
-                except Exception as e:
-                    # 捕获异常并传递给 Future
-                    future.set_exception(e)
-                finally:
-                    self.task_queue.task_done()
+            try:
+                task.execute()
+            finally:
+                self.task_queue.task_done()
 
     def stop(self):
         self._stop_event.set()
 
-    def restart(self):
-        self._stop_event.clear()
-
 
 class ThreadPool:
-    def __init__(self, pool_size):
-        self.task_queue = queue.Queue()
+    def __init__(self, pool_size: int):
+        self.task_queue: queue.Queue = queue.Queue()
         self.pool_size = pool_size
 
         self.workers: list[Worker] = []
         self.status: PoolStatus = PoolStatus.STOPPED
-        self.notify_condition = Condition()
         self.start()
 
     def start(self):
@@ -93,53 +84,22 @@ class ThreadPool:
             logger.info("当前线程池正在停止")
             return
 
-        self.workers = []
-
-        # 初始化并启动消费者线程 (Workers)
         for _ in range(self.pool_size):
             self._create_one_worker()
 
         self.status = PoolStatus.RUNNING
 
     def _create_one_worker(self):
-        worker_handler = Worker(self.task_queue, self.notify_condition)
+        worker_handler = Worker(self.task_queue)
         self.workers.append(worker_handler)
         worker_handler.start()
-
-    def _worker(self):
-        """消费者：不断从队列中提取任务并执行"""
-        while True:
-            # 获取一个任务封装（Future, 函数, 参数）
-            task_item = self.task_queue.get()
-            if task_item is None:  # 收到停止信号
-                break
-
-            future, fn, args, kwargs = task_item
-
-            # 检查 Future 是否已被取消
-            if not future.set_running_or_notify_cancel():
-                self.task_queue.task_done()
-                continue
-
-            try:
-                # 执行任务并设置结果
-                result = fn(*args, **kwargs)
-                future.set_result(result)
-            except Exception as e:
-                # 捕获异常并传递给 Future
-                future.set_exception(e)
-            finally:
-                self.task_queue.task_done()
 
     def submit(self, fn, *args, **kwargs):
         """生产者：向池中提交任务，立即返回 Future"""
         if self.status != PoolStatus.RUNNING:
             raise RuntimeError("不在运行中, 无法提交任务")
 
-        # 创建 Future 对象
         task = task_wrapper(fn, *args, **kwargs)
-
-        # 将任务包装后放入队列
         self.task_queue.put(task)
         return task.get_future()
 
@@ -150,10 +110,13 @@ class ThreadPool:
             return
 
         self.status = PoolStatus.STOPPING
+
+        for w in self.workers:
+            w.stop()
         for _ in range(len(self.workers)):
             self.task_queue.put(None)
-        for t in self.workers:
-            t.join()
+        for w in self.workers:
+            w.join()
 
         self.workers = []
         self.status = PoolStatus.STOPPED
@@ -166,11 +129,18 @@ class ThreadPool:
             return
 
         if new_size > self.pool_size:
-            for i in range(new_size - self.pool_size):
+            for _ in range(new_size - self.pool_size):
                 self._create_one_worker()
             self.pool_size = new_size
             return
 
         if new_size < self.pool_size:
-            for i in range(self.pool_size - new_size):
-                pass
+            to_remove = self.pool_size - new_size
+            victims = self.workers[-to_remove:]
+            for w in victims:
+                w.stop()
+                self.task_queue.put(None)
+            for w in victims:
+                w.join()
+            self.workers = self.workers[:-to_remove]
+            self.pool_size = new_size
