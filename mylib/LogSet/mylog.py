@@ -15,7 +15,7 @@ class BracketedFormatter(logging.Formatter):
         return super().format(record)
 
 
-def logSetUp(
+def log_set(
     log_name: str = "",
     log_file: Path | None = None,
     *,
@@ -25,7 +25,7 @@ def logSetUp(
     """
     配置并返回一个包含日志等级的 logging.Logger 对象。
     默认控制台日志等级为 DEBUG, 文件输出等级为 WARNING。
-    
+
     :param log_name: 日志名称标识
     :param log_file: 日志文件路径，为 None 时不输出到文件
     :param console_level: 控制台输出的最低日志等级，支持 int 或字符串(如 "INFO")
@@ -64,7 +64,9 @@ def logSetUp(
 
 
 def test():
-    logger = logSetUp("MyLogger", Path("./main.log"), console_level="INFO", file_level="DEBUG")
+    logger = log_set(
+        "MyLogger", Path("./main.log"), console_level="INFO", file_level="DEBUG"
+    )
     logger.debug("这是一条调试信息 (DEBUG)")
     logger.info("这是一条普通信息 (INFO)")
     logger.warning("这是一条警告信息 (WARNING)")

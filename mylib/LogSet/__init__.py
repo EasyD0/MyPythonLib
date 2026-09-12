@@ -1,1 +1,1 @@
-from .mylog import logSetUp
+from .mylog import log_set
