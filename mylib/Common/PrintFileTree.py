@@ -1,8 +1,8 @@
 import os
+import stat
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-
-import datetime
 
 from ..LogSet import log_set
 
@@ -14,6 +14,7 @@ class FileInfo:
     name: str
     time: str
     location: Path
+    is_dir: bool = False  # True 表示该条目实际是目录(被忽略内部的隐藏目录, 或符号链接指向的目录)
 
 
 class FileTree:
@@ -27,44 +28,48 @@ class FileTree:
         # 构建文件树
         self._build_tree(dir)
 
+    def _make_file_info(self, entry: os.DirEntry, is_dir: bool = False) -> FileInfo:
+        """从 scandir 条目构造 FileInfo, mtime 直接取 scandir 缓存的 stat 结果"""
+        mtime = datetime.fromtimestamp(entry.stat().st_mtime).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        return FileInfo(
+            name=entry.name, time=mtime, location=Path(entry.path), is_dir=is_dir
+        )
+
     def _build_tree(self, dir: Path):
         """递归构建文件树"""
         try:
-            items = sorted(dir.iterdir(), key=lambda x: (not x.is_dir(), x.name))
+            with os.scandir(dir) as it:
+                # 目录排前, 文件排后; is_dir/is_symlink/stat 由 scandir 缓存, 每项只触发一次系统调用
+                entries = sorted(it, key=lambda e: (not e.is_dir(), e.name))
 
-            for item in items:
-                # 检查是否为隐藏文件夹（以.开头）
-                is_hidden = item.name.startswith(".")
+            for entry in entries:
+                is_dir = entry.is_dir()
 
-                if item.is_dir():
-                    if self.ignore_hidden and is_hidden:
-                        # 忽略目录内部，但添加目录本身
-                        file_info = FileInfo(
-                            name=item.name,
-                            time=datetime.fromtimestamp(
-                                os.path.getmtime(item)
-                            ).strftime("%Y-%m-%d %H:%M:%S"),
-                            location=item,
-                        )
-                        self.curFiles.append(file_info)
+                # 符号链接/junction(Windows reparse point)只显示自身, 不递归进入,
+                # 规避循环链接导致的死循环; is_symlink 不识别 junction, 需检查 reparse 标记
+                st = entry.stat(follow_symlinks=False)
+                is_reparse = stat.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0) != 0
+                if is_reparse:
+                    self.curFiles.append(self._make_file_info(entry, is_dir=is_dir))
+                    continue
+
+                if is_dir:
+                    if self.ignore_hidden and entry.name.startswith("."):
+                        # 忽略目录内部, 但添加目录本身
+                        self.curFiles.append(self._make_file_info(entry, is_dir=True))
                     else:
                         # 创建子目录的 FileTree
-                        child_tree = FileTree(item, self.ignore_hidden)
+                        child_tree = FileTree(Path(entry.path), self.ignore_hidden)
                         self.curDirs.append(child_tree)
                 else:
                     # 添加文件信息
-                    file_info = FileInfo(
-                        name=item.name,
-                        time=datetime.fromtimestamp(os.path.getmtime(item)).strftime(
-                            "%Y-%m-%d %H:%M:%S"
-                        ),
-                        location=item,
-                    )
-                    self.curFiles.append(file_info)
+                    self.curFiles.append(self._make_file_info(entry))
         except Exception as e:
             logger.error(f"构建文件树时出错 {dir}: {e}")
 
-    def _str(self, ignore_dir_name: set[str] = None):
+    def _str(self, ignore_dir_name: set[str] | None = None):
         """将文件树转换为字符串表示"""
         lines = []
         ignore_dir_name = ignore_dir_name or set()
@@ -73,11 +78,12 @@ class FileTree:
             """递归格式化文件树"""
             # 处理目录本身
 
-            # 添加目录下的文件
+            # 添加目录下的文件(含被忽略内部的目录, 目录条目带 / 后缀)
             for i, file in enumerate(tree.curFiles):
                 is_file_last = i == len(tree.curFiles) - 1
                 file_prefix = "└── " if (is_file_last and not tree.curDirs) else "├── "
-                lines.append(f"{prefix}{file_prefix}{file.name} ({file.time})")
+                suffix = "/" if file.is_dir else ""
+                lines.append(f"{prefix}{file_prefix}{file.name}{suffix} ({file.time})")
 
             # 递归处理子目录
             for i, child in enumerate(tree.curDirs):
@@ -99,7 +105,7 @@ class FileTree:
     def __str__(self):
         return self._str()
 
-    def print(self, ignore_dir_name: set[str] = None):
+    def print_tree(self, ignore_dir_name: set[str] | None = None):
         """打印文件树"""
         print(f"{self.dir_path.resolve()}下的文件为:")
         print(self._str(ignore_dir_name))
@@ -107,7 +113,7 @@ class FileTree:
 
 def print_file_tree(
         root_dir: Path,
-        ignore_dir_name: set[str] = None,
+        ignore_dir_name: set[str] | None = None,
         ignore_hidden: bool = True,
 ):
     """
@@ -117,4 +123,4 @@ def print_file_tree(
     if ignore_dir_name is None:
         ignore_dir_name = {"tmp_repo", ".git"}
     file_tree = FileTree(root_dir, ignore_hidden)
-    file_tree.print(ignore_dir_name=ignore_dir_name)
+    file_tree.print_tree(ignore_dir_name=ignore_dir_name)

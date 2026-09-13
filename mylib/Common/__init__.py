@@ -8,8 +8,8 @@ from .Decorator import (
     singleton,
     cache,
     rate_limit,
-    print_file_tree,
 )
+from .PrintFileTree import print_file_tree
 
 __all__ = [
     "cleanDir",
